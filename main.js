@@ -1,13 +1,16 @@
-const { app, globalShortcut, clipboard, BrowserWindow } = require("electron");
+const { app, globalShortcut, clipboard, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require("electron");
 const { exec } = require("child_process");
+const fs = require('fs');
+const path = require('path');
 const OpenAI = require("openai");
 
-const client = new OpenAI({
-  apiKey: "gqre4cVP.nfa6j1lzPmmnD0pppTBva0mAffUF2V4y",
-  baseURL: "https://inference.baseten.co/v1",
-});
+let client;
 
 let mainWindow;
+let settingsWindow = null;
+let customPrompt = "You are a grammar and English correction assistant. Fix grammar, spelling, punctuation, and correct English if needed. If there is clearly bad utilization of English, change it to proper English. Do NOT change the meaning, tone, or rewrite the content. Only make necessary corrections to improve grammar and English language. Return only the corrected text, nothing else.";
+let apiKey = "";
+let baseURL = "";
 
 function createWindow() {
   // Create a hidden window that runs in the background
@@ -63,12 +66,11 @@ async function handleGrammarFix() {
               // Call LLM to fix grammar while preserving meaning
               const response = await client.chat.completions.create({
                 model: "openai/gpt-oss-120b",
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      "You are a grammar and English correction assistant. Fix grammar, spelling, punctuation, and correct English if needed. If there is clearly bad utilization of English, change it to proper English. Do NOT change the meaning, tone, or rewrite the content. Only make necessary corrections to improve grammar and English language. Return only the corrected text, nothing else.",
-                  },
+                 messages: [
+                   {
+                     role: "system",
+                     content: customPrompt,
+                   },
                   {
                     role: "user",
                     content: selectedText,
@@ -162,12 +164,116 @@ function fixGrammar(text) {
 }
 
 app.whenReady().then(() => {
+  app.dock.hide(); // Hide from dock on macOS
   createWindow();
   registerGlobalShortcut();
+
+  // Load config
+  const configPath = path.join(app.getPath('userData'), 'config.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    customPrompt = config.prompt || customPrompt;
+    apiKey = config.apiKey || apiKey;
+    baseURL = config.baseURL || baseURL;
+  } catch (e) {}
+
+  // Create OpenAI client
+  client = new OpenAI({
+    apiKey: apiKey,
+    baseURL: baseURL,
+  });
+
+  // Create tray icon
+  let icon = nativeImage.createFromPath(__dirname + '/icon.png');
+  if (icon.isEmpty()) {
+    // Fallback to a minimal transparent icon
+    const buffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+    icon = nativeImage.createFromBuffer(buffer);
+  } else {
+    // Resize if too large
+    const size = icon.getSize();
+    if (size.width > 32 || size.height > 32) {
+      icon = icon.resize({ width: 16, height: 16 });
+    }
+  }
+  const tray = new Tray(icon);
+  tray.setToolTip('Grammar Fixer');
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Settings', click: () => openSettings() },
+    { label: 'Quit', click: () => app.quit() }
+  ]);
+  tray.setContextMenu(contextMenu);
 
   console.log("Grammar Fixer is running in the background!");
   console.log("Press Ctrl+I to fix selected text");
 });
+
+// IPC handlers
+ipcMain.on('save-settings', (event, data) => {
+  customPrompt = data.prompt;
+  apiKey = data.apiKey;
+  baseURL = data.baseURL;
+  const configPath = path.join(app.getPath('userData'), 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ prompt: customPrompt, apiKey, baseURL }));
+  // Recreate client
+  client = new OpenAI({
+    apiKey: apiKey,
+    baseURL: baseURL,
+  });
+  if (settingsWindow) settingsWindow.close();
+});
+
+function openSettings() {
+  if (settingsWindow) {
+    settingsWindow.focus();
+    return;
+  }
+  settingsWindow = new BrowserWindow({
+    width: 500,
+    height: 400,
+    show: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  settingsWindow.loadURL(`data:text/html,
+<html>
+<body>
+<h3>Custom Prompt</h3>
+<textarea id="prompt" style="width:100%;height:150px"></textarea><br>
+<h3>API Key</h3>
+<input id="apiKey" type="password" style="width:100%"><br>
+<h3>Base URL</h3>
+<input id="baseURL" style="width:100%"><br><br>
+<button onclick="save()">Save</button>
+</body>
+<script>
+const { ipcRenderer } = require('electron');
+ipcRenderer.on('load-settings', (event, data) => {
+  document.getElementById('prompt').value = data.prompt;
+  document.getElementById('apiKey').value = data.apiKey;
+  document.getElementById('baseURL').value = data.baseURL;
+});
+function save() {
+  const data = {
+    prompt: document.getElementById('prompt').value,
+    apiKey: document.getElementById('apiKey').value,
+    baseURL: document.getElementById('baseURL').value,
+  };
+  ipcRenderer.send('save-settings', data);
+}
+</script>
+</html>`);
+  settingsWindow.once('ready-to-show', () => {
+    settingsWindow.show();
+    settingsWindow.webContents.send('load-settings', { prompt: customPrompt, apiKey, baseURL });
+  });
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+  });
+}
 
 app.on("window-all-closed", () => {
   // Keep the app running even when all windows are closed
