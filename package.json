@@ -1,0 +1,19 @@
+{
+  "name": "grammar-fixer-electron",
+  "version": "1.0.0",
+  "description": "An Electron app that fixes grammar with Ctrl+I",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": ["electron", "grammar", "text-editing"],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  }
+}
